@@ -721,45 +721,7 @@ branchl r12, HSD_Free
 # Allow to return to CSS since ranked set is over
 
 VSSceneDecide_SkipRankedHandler:
-
-###########################################################################
-# VSSceneDecide: Handle Rotation Mode
-###########################################################################
-lbz r3, OFST_R13_ONLINE_MODE(r13)
-cmpwi r3, ONLINE_MODE_ROTATION
-bne VSSceneDecide_SkipRotationHandler
-
-# If connection is not active, disconnect and go to CSS
-lbz r3, MSRB_CONNECTION_STATE(REG_MSRB_ADDR)
-cmpwi r3, MM_STATE_IDLE
-beq VSSceneDecide_DisconnectAndReturnToCSS
-
-# If last match ended in a disconnect, go to CSS
-lwz r4, OFST_R13_ODB_ADDR(r13)
-lbz r3, ODB_IS_DISCONNECT_STATE_DISPLAYED(r4)
-cmpwi r3, 1
-beq VSSceneDecide_DisconnectAndReturnToCSS
-
-# Connection is active — send CMD_CLEANUP_CONNECTION
-# (C++ side intercepts this in rotation mode to only reset stage selection)
-li r3, 1
-branchl r12, HSD_MemAlloc
-mr REG_TXB_ADDR, r3
-
-li r3, CONST_SlippiCmdCleanupConnections
-stb r3, 0(REG_TXB_ADDR)
-
-mr r3, REG_TXB_ADDR
-li r4, 1
-li r5, CONST_ExiWrite
-branchl r12, FN_EXITransferBuffer
-
-mr r3, REG_TXB_ADDR
-branchl r12, HSD_Free
-
-VSSceneDecide_SkipRotationHandler:
-
-# Go back to CSS (rotation follows Direct flow — loser picks stage on CSS)
+# Go back to CSS (rotation and other non-ranked modes just return to CSS)
 load r4, 0x80479d30
 li r3, 0x01
 stb r3, 0x5(r4)
