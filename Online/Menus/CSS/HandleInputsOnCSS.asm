@@ -231,7 +231,10 @@ bne CHECK_SHOULD_START_MATCH
 rlwinm.	r0, REG_INPUTS, 0, 19, 19
 bne HANDLE_CONNECTED_ADVANCE
 
-# Check if direct mode && loser && already chose stage
+# Check if direct/teams mode && loser && already chose stage (not rotation)
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq CHECK_SHOULD_START_MATCH         # Rotation doesn't use SSS/CHOSESTAGE
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_DIRECT        # Check if this is direct/teams mode
 blt CHECK_SHOULD_START_MATCH
@@ -257,13 +260,23 @@ loadGlobalFrame r3
 cmpwi r3, 0
 beq CHECK_SHOULD_START_MATCH # Don't lock-in on the very first frame
 
-# Check which mode we are playing.
+# Check which mode we are playing. Use MSRB search mode (from C++) as authoritative source
+# because OFST_R13_ONLINE_MODE can get corrupted to TEAMS during game transitions
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq HANDLE_CONNECTED_ROTATION
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_UNRANKED
 beq HANDLE_CONNECTED_UNRANKED
 cmpwi r3, ONLINE_MODE_DIRECT
 bge HANDLE_CONNECTED_DIRECT
 b 0x0                           # stall if neither
+
+# Rotation mode: all players lock in with random stage, no SSS
+HANDLE_CONNECTED_ROTATION:
+li  r3, SB_RAND
+bl FN_TX_LOCK_IN
+b CHECK_SHOULD_START_MATCH
 
 # Branch to this mode's behavior
 HANDLE_CONNECTED_UNRANKED:

@@ -344,7 +344,8 @@
 .set MSRB_GAME_INFO_BLOCK, MSRB_ERROR_MSG + ERROR_MESSAGE_LEN # MATCH_STRUCT_LEN
 .set MSRB_MATCH_ID, MSRB_GAME_INFO_BLOCK + MATCH_STRUCT_LEN # char[51]
 .set MSRB_ALT_STAGE_MODE, MSRB_MATCH_ID + 51 # u8
-.set MSRB_SIZE, MSRB_ALT_STAGE_MODE + 1
+.set MSRB_SEARCH_ONLINE_MODE, MSRB_ALT_STAGE_MODE + 1 # u8, lastSearch.mode from C++
+.set MSRB_SIZE, MSRB_SEARCH_ONLINE_MODE + 1
 
 ################################################################################
 # Rank Info Response Buffer

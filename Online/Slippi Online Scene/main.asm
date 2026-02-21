@@ -395,7 +395,16 @@ bne CSSSceneDecide_Advance
 b CSSSceneDecide_Exit
 
 CSSSceneDecide_Advance:
-# Check for direct mode
+# Load MSRB to check authoritative search mode from C++
+loadwz REG_MSRB_ADDR, CSSDT_BUF_ADDR
+lwz REG_MSRB_ADDR, CSSDT_MSRB_ADDR(REG_MSRB_ADDR)
+
+# Check for rotation first using authoritative C++ mode
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq CSSSceneDecide_Adv_IsRotation_Handler
+
+# Check other modes using ASM mode variable
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_RANKED
 beq CSSSceneDecide_Adv_IsRanked
@@ -404,8 +413,6 @@ beq CSSSceneDecide_Adv_IsUnranked
 cmpwi r3, ONLINE_MODE_DIRECT
 beq CSSSceneDecide_Adv_IsDirect
 cmpwi r3, ONLINE_MODE_TEAMS
-beq CSSSceneDecide_Adv_IsDirect
-cmpwi r3, ONLINE_MODE_ROTATION
 beq CSSSceneDecide_Adv_IsDirect
 
 ################################################################################
@@ -445,6 +452,12 @@ load r4, 0x80479d30
 li r3, 0x06
 stb r3, 0x5(r4)
 b CSSSceneDecide_Exit
+
+################################################################################
+# Rotation Mode Logic — always go to splash (random stage, all players wait on CSS)
+################################################################################
+CSSSceneDecide_Adv_IsRotation_Handler:
+b CSSSceneDecide_LoadSplash
 
 ################################################################################
 # Direct Mode Logic
@@ -538,8 +551,8 @@ mr  REG_MSRB_ADDR,r3
 CHECK_SHOULD_START_MATCH:
 lbz r3, MSRB_IS_LOCAL_PLAYER_READY(REG_MSRB_ADDR)
 lbz r4, MSRB_IS_REMOTE_PLAYER_READY(REG_MSRB_ADDR)
-cmpw  r3,r4
-bne SSSSceneDecide_Advance_NotReady # If both players are not ready, go to CSS
+and. r3, r3, r4
+beq SSSSceneDecide_Advance_NotReady # If not both players are ready, go to CSS
 
 SSSSceneDecide_Advance_IsReady:
 # Both players are locked in, jump straight to splash screen
@@ -741,8 +754,12 @@ stb r3,OFST_R13_ISWINNER(r13)
 SELECTOR_OVERWRITE:
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_TEAMS
-bne SELECTOR_OVERWRITE_NON_TEAMS
+beq SELECTOR_OVERWRITE_TEAMS
+cmpwi r3, ONLINE_MODE_ROTATION
+beq SELECTOR_OVERWRITE_ROTATION
+b SELECTOR_OVERWRITE_NON_TEAMS
 
+SELECTOR_OVERWRITE_TEAMS:
 # If teams, just overwrite it so that P1 always picks
 lbz r3, MSRB_LOCAL_PLAYER_INDEX(REG_MSRB_ADDR)
 li r4, 1
@@ -751,6 +768,12 @@ bne SELECTOR_OVERWRITE_TEAMS_EXEC
 li r4, 0
 SELECTOR_OVERWRITE_TEAMS_EXEC:
 stb r4,OFST_R13_ISWINNER(r13) # 1 for all non-0 players
+b SELECTOR_OVERWRITE_END
+
+SELECTOR_OVERWRITE_ROTATION:
+# For rotation, keep CheckIfWonLastGame result as-is.
+# Active winner gets ISWINNER_WON, everyone else gets ISWINNER_LOST.
+# All non-winners (losers + spectators) will pick stage via SSS.
 b SELECTOR_OVERWRITE_END
 
 SELECTOR_OVERWRITE_NON_TEAMS:
@@ -802,9 +825,11 @@ li r3, 1
 stb r3, 0x5D(REG_MATCH_END_STRUCT) # Trick logic into thinking player lost
 HACK_GOLD_TEXT_LOSER_END:
 
-# For teams, trick the text into never turning gold (Doesn't work for both LRAS and wins easily)
+# For teams/rotation, trick the text into never turning gold (Doesn't work for both LRAS and wins easily)
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_TEAMS
+beq HACK_GOLD_TEXT_FORCE_OFF
+cmpwi r3, ONLINE_MODE_ROTATION
 beq HACK_GOLD_TEXT_FORCE_OFF
 cmpwi r3, ONLINE_MODE_RANKED
 bne HACK_GOLD_TEXT_END # Also prevent gold text in ranked
@@ -882,7 +907,10 @@ mr REG_MSRB_ADDR, r3
 lwz	REG_VS_SSS_DATA, -0x77C0 (r13)
 addi	REG_VS_SSS_DATA, REG_VS_SSS_DATA, 1424 + 0x8   # adding 0x8 to skip past some unk stuff
 
-# Overwrite SSS Data colors for teams
+# Overwrite SSS Data colors for teams (not rotation — players keep their selected skins)
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq SKIP_CHAR_COLOR_OVERWRITE
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_TEAMS
 bne SKIP_CHAR_COLOR_OVERWRITE
@@ -919,6 +947,13 @@ li  r5,0x10
 branchl r12,memcpy
 #Modify Splash Data
 load  r4,0x80490888
+
+# Check if rotation — use active player ports instead of hardcoded 0/1
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq SPLASH_ROTATION_SETUP
+
+# Non-rotation: use port 0 and port 1 as P1/P2
 lbz r3, 0x60(REG_VS_SSS_DATA) # load p1 char id
 stb r3,0x5(r4)
 lbz r3, 0x63(REG_VS_SSS_DATA) # load char color
@@ -927,11 +962,44 @@ lbz r3, 0x60 + 0x24(REG_VS_SSS_DATA) # load p2 char id
 stb r3,0x8(r4)
 lbz r3, 0x63 + 0x24(REG_VS_SSS_DATA) # load char color
 stb r3,0xE(r4)
+b SPLASH_SETUP_DONE
+
+SPLASH_ROTATION_SETUP:
+# Rotation: get active player port indices from VS_LEFT/VS_RIGHT
+# Format: [port2, port1, port0, count] — shift right 8 to get port0
+lwz r3, MSRB_VS_LEFT_PLAYERS(REG_MSRB_ADDR)
+srwi r3, r3, 8
+andi. r3, r3, 0xFF     # left active player port index
+mulli r3, r3, 0x24     # offset into player data
+addi r5, r3, 0x60
+lbzx r3, REG_VS_SSS_DATA, r5 # char id
+stb r3,0x5(r4)
+addi r5, r5, 3
+lbzx r3, REG_VS_SSS_DATA, r5 # char color
+stb r3,0xB(r4)
+
+lwz r3, MSRB_VS_RIGHT_PLAYERS(REG_MSRB_ADDR)
+srwi r3, r3, 8
+andi. r3, r3, 0xFF     # right active player port index
+mulli r3, r3, 0x24     # offset into player data
+addi r5, r3, 0x60
+lbzx r3, REG_VS_SSS_DATA, r5 # char id
+stb r3,0x8(r4)
+addi r5, r5, 3
+lbzx r3, REG_VS_SSS_DATA, r5 # char color
+stb r3,0xE(r4)
+
+SPLASH_SETUP_DONE:
 
 # Make sure to clear out any special stages setup
 li r3, 0
 stb r3,-0x1(r4) # match event mode
 stb r3,-0x5(r4) # match pvp type (singles, teams, giant, etc...)
+
+# For rotation, skip teams setup entirely (1v1 splash)
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq SKIP_TEAMS_SETUP
 
 lbz r3, MSRB_GAME_INFO_BLOCK + 0x8(REG_MSRB_ADDR)
 cmpwi r3, 0 # 0 = no teams
@@ -1050,6 +1118,12 @@ SKIP_TEAMS_SETUP:
 
 # Preload these fighters
 load r4,0x80432078
+
+# Check if rotation — preload active players instead of port 0/1
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq PRELOAD_ROTATION_FIGHTERS
+
 lbz r3, 0x60(REG_VS_SSS_DATA) # load p1 char id
 stw r3, 0x14 (r4)
 lbz r3, 0x63(REG_VS_SSS_DATA) # load char color
@@ -1071,6 +1145,32 @@ lbz r3, 0x60 + 0x24*3(REG_VS_SSS_DATA) # load p4 char id
 stw r3, 0x2C (r4)
 lbz r3, 0x63 + 0x24*3(REG_VS_SSS_DATA) # load char color
 stb r3, 0x30 (r4)
+b SKIP_TEAMS_PRELOAD
+
+PRELOAD_ROTATION_FIGHTERS:
+# Get left active player port from VS_LEFT_PLAYERS
+lwz r3, MSRB_VS_LEFT_PLAYERS(REG_MSRB_ADDR)
+srwi r3, r3, 8
+andi. r3, r3, 0xFF
+mulli r3, r3, 0x24
+addi r5, r3, 0x60
+lbzx r3, REG_VS_SSS_DATA, r5
+stw r3, 0x14 (r4)
+addi r5, r5, 3
+lbzx r3, REG_VS_SSS_DATA, r5
+stb r3, 0x18 (r4)
+
+# Get right active player port from VS_RIGHT_PLAYERS
+lwz r3, MSRB_VS_RIGHT_PLAYERS(REG_MSRB_ADDR)
+srwi r3, r3, 8
+andi. r3, r3, 0xFF
+mulli r3, r3, 0x24
+addi r5, r3, 0x60
+lbzx r3, REG_VS_SSS_DATA, r5
+stw r3, 0x1C (r4)
+addi r5, r5, 3
+lbzx r3, REG_VS_SSS_DATA, r5
+stb r3, 0x20 (r4)
 
 SKIP_TEAMS_PRELOAD:
 # Preload the stage
