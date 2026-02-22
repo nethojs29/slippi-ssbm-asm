@@ -118,6 +118,27 @@ lbz r3, CSSDT_CHAT_WINDOW_OPENED(REG_CSSDT_ADDR)
 cmpwi r3, 0
 bne SKIP_START_MATCH # skip input if chat window is opened
 
+# Toggle between Direct and Rotation mode with R button
+lbz r3, OFST_R13_ONLINE_MODE(r13)
+cmpwi r3, ONLINE_MODE_DIRECT
+beq CHECK_TOGGLE_INPUT
+cmpwi r3, ONLINE_MODE_ROTATION
+beq CHECK_TOGGLE_INPUT
+b SKIP_TOGGLE
+
+CHECK_TOGGLE_INPUT:
+rlwinm. r0, REG_INPUTS, 0, 0x20 # R button (digital)
+beq SKIP_TOGGLE
+
+# XOR with 6: Direct(2) <-> Rotation(4)
+lbz r3, OFST_R13_ONLINE_MODE(r13)
+xori r3, r3, 6
+stb r3, OFST_R13_ONLINE_MODE(r13)
+li r3, 2
+branchl r12, SFX_Menu_CommonSound
+
+SKIP_TOGGLE:
+
 # When idle, pressing start will start finding match
 # Check if start was pressed
 rlwinm.	r0, REG_INPUTS, 0, 19, 19
@@ -210,7 +231,10 @@ bne CHECK_SHOULD_START_MATCH
 rlwinm.	r0, REG_INPUTS, 0, 19, 19
 bne HANDLE_CONNECTED_ADVANCE
 
-# Check if direct mode && loser && already chose stage
+# Check if direct/teams mode && loser && already chose stage (not rotation)
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq CHECK_SHOULD_START_MATCH         # Rotation doesn't use SSS/CHOSESTAGE
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_DIRECT        # Check if this is direct/teams mode
 blt CHECK_SHOULD_START_MATCH
@@ -236,13 +260,23 @@ loadGlobalFrame r3
 cmpwi r3, 0
 beq CHECK_SHOULD_START_MATCH # Don't lock-in on the very first frame
 
-# Check which mode we are playing.
+# Check which mode we are playing. Use MSRB search mode (from C++) as authoritative source
+# because OFST_R13_ONLINE_MODE can get corrupted to TEAMS during game transitions
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
+cmpwi r3, ONLINE_MODE_ROTATION
+beq HANDLE_CONNECTED_ROTATION
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_UNRANKED
 beq HANDLE_CONNECTED_UNRANKED
 cmpwi r3, ONLINE_MODE_DIRECT
 bge HANDLE_CONNECTED_DIRECT
 b 0x0                           # stall if neither
+
+# Rotation mode: all players lock in with random stage, no SSS
+HANDLE_CONNECTED_ROTATION:
+li  r3, SB_RAND
+bl FN_TX_LOCK_IN
+b CHECK_SHOULD_START_MATCH
 
 # Branch to this mode's behavior
 HANDLE_CONNECTED_UNRANKED:
@@ -279,9 +313,13 @@ b CHECK_SHOULD_START_MATCH
 HANDLE_CONNECTED_DIRECT_LOADSSS:
 # Set teams on/off bit. This is required by the "disable fod during doubles" gecko code
 lbz r4, OFST_R13_ONLINE_MODE(r13)
-cmpwi r4, ONLINE_MODE_TEAMS
 li r3, 0
-bne SET_TEAMS_BOOL
+cmpwi r4, ONLINE_MODE_TEAMS
+beq SET_TEAMS_BOOL_ON
+cmpwi r4, ONLINE_MODE_ROTATION
+beq SET_TEAMS_BOOL_ON
+b SET_TEAMS_BOOL
+SET_TEAMS_BOOL_ON:
 li r3, 1
 SET_TEAMS_BOOL:
 lwz	r4, -0x49F0(r13)
@@ -408,9 +446,11 @@ stb r3, PSTB_CHAR_COLOR(REG_TXB_ADDR)
 li r3, 1 # merge character
 stb r3, PSTB_CHAR_OPT(REG_TXB_ADDR)
 
-# Send a blank team ID if this isn't teams mode.
+# Send a blank team ID if this isn't teams/rotation mode.
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_TEAMS
+beq SEND_TEAM_ID
+cmpwi r3, ONLINE_MODE_ROTATION
 beq SEND_TEAM_ID
 li r3, 0
 stb r3, PSTB_TEAM_ID(REG_TXB_ADDR)

@@ -79,13 +79,22 @@ li r3, MSRB_SIZE
 branchl r12, HSD_MemAlloc
 stw r3, CSSDT_MSRB_ADDR(REG_CSSDT_ADDR)
 
+# Zero out MSRB buffer to prevent stale/garbage data on first frame
+# r3 still holds the allocated address from HSD_MemAlloc
+li r4, MSRB_SIZE
+branchl r12, Zero_AreaLength
+
 ################################################################################
 # Initialize values
 ################################################################################
-# Initialize start team color to red (only on teams mode)
+# Initialize start team color to red (only on teams/rotation mode)
 lbz r3, OFST_R13_ONLINE_MODE(r13)
 cmpwi r3, ONLINE_MODE_TEAMS
-bne SKIP_TEAM_SETUP
+beq DO_TEAM_SETUP
+cmpwi r3, ONLINE_MODE_ROTATION
+beq DO_TEAM_SETUP
+b SKIP_TEAM_SETUP
+DO_TEAM_SETUP:
 
 # Fetch INJ data table in order to get previous team idx
 # Needed to restore the proper team color after a game finishes
