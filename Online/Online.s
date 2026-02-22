@@ -345,7 +345,8 @@
 .set MSRB_MATCH_ID, MSRB_GAME_INFO_BLOCK + MATCH_STRUCT_LEN # char[51]
 .set MSRB_ALT_STAGE_MODE, MSRB_MATCH_ID + 51 # u8
 .set MSRB_SEARCH_ONLINE_MODE, MSRB_ALT_STAGE_MODE + 1 # u8, lastSearch.mode from C++
-.set MSRB_SIZE, MSRB_SEARCH_ONLINE_MODE + 1
+.set MSRB_IS_SPECTATOR, MSRB_SEARCH_ONLINE_MODE + 1 # u8, 1 if local player is spectating in rotation
+.set MSRB_SIZE, MSRB_IS_SPECTATOR + 1
 
 ################################################################################
 # Rank Info Response Buffer

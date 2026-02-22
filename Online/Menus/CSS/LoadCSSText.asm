@@ -148,7 +148,11 @@ blrl
 .string "cancel"
 .set TPO_STRING_CLEAR_ERROR, TPO_STRING_CANCEL + 7
 .string "clear error"
-.set TPO_STRING_SPINNER_1, TPO_STRING_CLEAR_ERROR + 12
+.set TPO_STRING_SPECTATING, TPO_STRING_CLEAR_ERROR + 12
+.string "Spectating"
+.set TPO_STRING_WAITING_FOR_MATCH, TPO_STRING_SPECTATING + 11
+.string "Waiting for match"
+.set TPO_STRING_SPINNER_1, TPO_STRING_WAITING_FOR_MATCH + 18
 .short 0x817B # ＋
 .byte 0x00
 .set TPO_STRING_SPINNER_2, TPO_STRING_SPINNER_1 + 3
@@ -763,6 +767,40 @@ b UPDATE_LINES_EXIT
 START_UPDATE_LINES:
 # Init cur line to first line
 li REG_SUBTEXT_IDX, STIDX_LINE1
+
+################################################################################
+# Spectator override for rotation mode
+################################################################################
+lbz r3, MSRB_IS_SPECTATOR(REG_MSRB_ADDR)
+cmpwi r3, 1
+bne NORMAL_UPDATE_LINES
+
+# Line 1: "Spectating"
+mr r4, REG_SUBTEXT_IDX
+addi r5, REG_TEXT_PROPERTIES, TPO_STRING_SPECTATING
+bl FN_UPDATE_TEXT
+li r3, 2
+stb r3, CSSDT_SPINNER1(REG_CSSDT_ADDR)
+
+# Line 2: empty
+addi REG_SUBTEXT_IDX, REG_SUBTEXT_IDX, LINE_IDX_GAP
+mr r4, REG_SUBTEXT_IDX
+addi r5, REG_TEXT_PROPERTIES, TPO_EMPTY_STRING
+bl FN_UPDATE_TEXT
+li r3, 2
+stb r3, CSSDT_SPINNER2(REG_CSSDT_ADDR)
+
+# Line 3: "Waiting for match"
+addi REG_SUBTEXT_IDX, REG_SUBTEXT_IDX, LINE_IDX_GAP
+mr r4, REG_SUBTEXT_IDX
+addi r5, REG_TEXT_PROPERTIES, TPO_STRING_WAITING_FOR_MATCH
+bl FN_UPDATE_TEXT
+li r3, 1
+stb r3, CSSDT_SPINNER3(REG_CSSDT_ADDR)
+
+b UPDATE_LINES_EXIT
+
+NORMAL_UPDATE_LINES:
 
 ################################################################################
 # Set up select character line
