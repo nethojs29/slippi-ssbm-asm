@@ -454,7 +454,7 @@ stb r3, 0x5(r4)
 b CSSSceneDecide_Exit
 
 ################################################################################
-# Rotation Mode Logic — always go to splash (random stage, all players wait on CSS)
+# Rotation Mode Logic - always go to splash (random stage, all players wait on CSS)
 ################################################################################
 CSSSceneDecide_Adv_IsRotation_Handler:
 b CSSSceneDecide_LoadSplash
@@ -907,7 +907,7 @@ mr REG_MSRB_ADDR, r3
 lwz	REG_VS_SSS_DATA, -0x77C0 (r13)
 addi	REG_VS_SSS_DATA, REG_VS_SSS_DATA, 1424 + 0x8   # adding 0x8 to skip past some unk stuff
 
-# Overwrite SSS Data colors for teams (not rotation — players keep their selected skins)
+# Overwrite SSS Data colors for teams (not rotation - players keep their selected skins)
 lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 beq SKIP_CHAR_COLOR_OVERWRITE
@@ -948,7 +948,7 @@ branchl r12,memcpy
 #Modify Splash Data
 load  r4,0x80490888
 
-# Check if rotation — use active player ports instead of hardcoded 0/1
+# Check if rotation - use active player ports instead of hardcoded 0/1
 lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 beq SPLASH_ROTATION_SETUP
@@ -966,11 +966,11 @@ b SPLASH_SETUP_DONE
 
 SPLASH_ROTATION_SETUP:
 # Rotation: get active player port indices from VS_LEFT/VS_RIGHT
-# Format: [port2, port1, port0, count] — shift right 8 to get port0
+# Format: [port2, port1, port0, count] - shift right 8 to get port0
 lwz r3, MSRB_VS_LEFT_PLAYERS(REG_MSRB_ADDR)
 srwi r3, r3, 8
-andi. r3, r3, 0xFF     # left active player port index
-mulli r3, r3, 0x24     # offset into player data
+andi. r3, r3, 0xFF # left active player port index
+mulli r3, r3, 0x24 # offset into player data
 addi r5, r3, 0x60
 lbzx r3, REG_VS_SSS_DATA, r5 # char id
 stb r3,0x5(r4)
@@ -980,8 +980,8 @@ stb r3,0xB(r4)
 
 lwz r3, MSRB_VS_RIGHT_PLAYERS(REG_MSRB_ADDR)
 srwi r3, r3, 8
-andi. r3, r3, 0xFF     # right active player port index
-mulli r3, r3, 0x24     # offset into player data
+andi. r3, r3, 0xFF # right active player port index
+mulli r3, r3, 0x24 # offset into player data
 addi r5, r3, 0x60
 lbzx r3, REG_VS_SSS_DATA, r5 # char id
 stb r3,0x8(r4)
@@ -1119,7 +1119,7 @@ SKIP_TEAMS_SETUP:
 # Preload these fighters
 load r4,0x80432078
 
-# Check if rotation — preload active players instead of port 0/1
+# Check if rotation - preload active players instead of port 0/1
 lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 beq PRELOAD_ROTATION_FIGHTERS

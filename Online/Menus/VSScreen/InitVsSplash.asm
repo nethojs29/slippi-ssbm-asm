@@ -154,7 +154,7 @@ lfs f1, TPO_BASE_CANVAS_SCALING(REG_TEXT_PROPERTIES)
 stfs f1, 0x24(REG_TEXT_STRUCT)
 stfs f1, 0x28(REG_TEXT_STRUCT)
 
-# Check for rotation mode first — force 1v1 splash with correct active player names
+# Check for rotation mode first, force 1v1 splash with correct active player names
 lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 beq INIT_ROTATION_PLAYER_TEXT
@@ -184,24 +184,24 @@ b INIT_STAGE_TEXT
 INIT_ROTATION_PLAYER_TEXT:
 # Rotation: use 1v1 splash with correct port labels (P1-P4), colors, and names
 
-# --- Left active player ---
+# Left active player
 lwz r3, MSRB_VS_LEFT_PLAYERS(REG_MSRB_ADDR)
-srwi r3, r3, 8         # shift out count byte, port0 is now in low byte
-andi. r3, r3, 0xFF     # r3 = port index (0-3)
-mr r7, r3              # save port index in r7
+srwi r3, r3, 8 # shift out count byte, port0 is now in low byte
+andi. r3, r3, 0xFF # r3 = port index (0-3)
+mr REG_PLAYER_INDEX, r3
 
 # Compute name pointer: MSRB_P1_NAME + portIdx * 31
-mulli r3, r7, 31
+mulli r3, REG_PLAYER_INDEX, 31
 addi r3, r3, MSRB_P1_NAME
 add r5, REG_MSRB_ADDR, r3
 
 # Compute label color pointer: TPO_P1_LABEL_COLOR + portIdx * 4
-mulli r3, r7, 4
+mulli r3, REG_PLAYER_INDEX, 4
 addi r3, r3, TPO_P1_LABEL_COLOR
 add r3, REG_TEXT_PROPERTIES, r3
 
 # Compute label string pointer: TPO_P1_STRING + portIdx * 3
-mulli r4, r7, 3
+mulli r4, REG_PLAYER_INDEX, 3
 addi r4, r4, TPO_P1_STRING
 add r4, REG_TEXT_PROPERTIES, r4
 
@@ -209,24 +209,24 @@ li r6, 0
 lfs f1, TPO_P1_X_POS(REG_TEXT_PROPERTIES)
 bl INIT_PLAYER_TEXT
 
-# --- Right active player ---
+# Right active player
 lwz r3, MSRB_VS_RIGHT_PLAYERS(REG_MSRB_ADDR)
-srwi r3, r3, 8         # shift out count byte
-andi. r3, r3, 0xFF     # r3 = port index (0-3)
-mr r7, r3              # save port index in r7
+srwi r3, r3, 8 # shift out count byte
+andi. r3, r3, 0xFF # r3 = port index (0-3)
+mr REG_PLAYER_INDEX, r3
 
 # Compute name pointer: MSRB_P1_NAME + portIdx * 31
-mulli r3, r7, 31
+mulli r3, REG_PLAYER_INDEX, 31
 addi r3, r3, MSRB_P1_NAME
 add r5, REG_MSRB_ADDR, r3
 
 # Compute label color pointer: TPO_P1_LABEL_COLOR + portIdx * 4
-mulli r3, r7, 4
+mulli r3, REG_PLAYER_INDEX, 4
 addi r3, r3, TPO_P1_LABEL_COLOR
 add r3, REG_TEXT_PROPERTIES, r3
 
 # Compute label string pointer: TPO_P1_STRING + portIdx * 3
-mulli r4, r7, 3
+mulli r4, REG_PLAYER_INDEX, 3
 addi r4, r4, TPO_P1_STRING
 add r4, REG_TEXT_PROPERTIES, r4
 
