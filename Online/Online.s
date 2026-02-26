@@ -346,7 +346,14 @@
 .set MSRB_ALT_STAGE_MODE, MSRB_MATCH_ID + 51 # u8
 .set MSRB_SEARCH_ONLINE_MODE, MSRB_ALT_STAGE_MODE + 1 # u8, lastSearch.mode from C++
 .set MSRB_IS_SPECTATOR, MSRB_SEARCH_ONLINE_MODE + 1 # u8, 1 if local player is spectating in rotation
-.set MSRB_SIZE, MSRB_IS_SPECTATOR + 1
+.set MSRB_ROT_PLAYER_COUNT, MSRB_IS_SPECTATOR + 1 # u8, total connected players
+.set MSRB_ROT_ACTIVE_P1, MSRB_ROT_PLAYER_COUNT + 1 # u8, port index of active player 1
+.set MSRB_ROT_ACTIVE_P2, MSRB_ROT_ACTIVE_P1 + 1 # u8, port index of active player 2
+.set MSRB_ROT_QUEUE_START, MSRB_ROT_ACTIVE_P2 + 1 # u8[8], waiting queue port indices (0xFF = unused)
+.set MSRB_ROT_QUEUE_SIZE, 8
+.set MSRB_ROT_GAMES_PLAYED, MSRB_ROT_QUEUE_START + MSRB_ROT_QUEUE_SIZE # u8
+.set MSRB_ROT_LAST_WINNER, MSRB_ROT_GAMES_PLAYED + 1 # u8, 0xFF = none/first game
+.set MSRB_SIZE, MSRB_ROT_LAST_WINNER + 1 # = 985
 
 ################################################################################
 # Rank Info Response Buffer
