@@ -55,7 +55,32 @@
   mflr  r4
   bl  InitializeMajorSceneStruct
 
+################################################################################
+# Set RotationLobby.dat filename on major scene 13 (m-ex table)
+################################################################################
+  branchl r12, 0x801a50ac       # Scene_GetMajorSceneDesc() -> r3 (m-ex table)
+  mr REG_MinorSceneStruct, r3   # reuse r31 as temp
+RotLobbyMajor_ScanLoop:
+  lbz r4, 0x1(REG_MinorSceneStruct)    # major_id at +0x1
+  extsb r4, r4
+  cmpwi r4, -1
+  beq RotLobbyMajor_Done               # hit terminator, not found
+  cmpwi r4, 13
+  beq RotLobbyMajor_Found
+  addi REG_MinorSceneStruct, REG_MinorSceneStruct, 0x18  # MajorStride
+  b RotLobbyMajor_ScanLoop
+RotLobbyMajor_Found:
+  bl RotLobbyMajor_DatString
+  mflr r3
+  stw r3, 0x14(REG_MinorSceneStruct)   # MajorSceneDesc.file_name at +0x14
+RotLobbyMajor_Done:
+
   b Injection_Exit
+
+RotLobbyMajor_DatString:
+  blrl
+  .string "RotationLobby.dat"
+  .align 2
 
 #region PointerConvert
 PointerConvert:
@@ -275,16 +300,6 @@ bl GamePrepSceneDecide    #SceneDecide
 .align 2
 bl GamePrepData           #Minor Data 1
 bl GamePrepData           #Minor Data 2
-#RotationLobby
-.byte 6                     #Minor Scene ID
-.byte 3                    #Amount of persistent heaps
-.align 2
-bl RotationLobbyScenePrep   #ScenePrep
-bl RotationLobbySceneDecide #SceneDecide
-.byte 0x20                  #Common Minor ID (Classic Mode Splash — triggers m-ex .dat load)
-.align 2
-.long 0x00000000            #Minor Data 1
-.long 0x00000000            #Minor Data 2
 #End
 .byte -1
 .align 2
@@ -746,14 +761,15 @@ branchl r12, HSD_Free
 
 VSSceneDecide_SkipRankedHandler:
 # Check if rotation mode — go to rotation lobby instead of CSS
-lbz r3, OFST_R13_ONLINE_MODE(r13)
+# Use MSRB (authoritative) — r13 online mode can be TEAMS during rotation transitions
+lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 bne VSSceneDecide_BackToCSS
 
-# Rotation: go to RotationLobby (minor scene 6, transition byte 0x07)
-load r4, 0x80479d30
-li r3, 0x07
-stb r3, 0x5(r4)
+# Rotation: exit to major scene 13 (RotationLobby)
+li r3, 13
+branchl r12, 0x801A42E8        # Scene_SetNextMajor(13)
+branchl r12, 0x801A42D4        # Scene_ExitMajor()
 b VSSceneDecide_ModeHandlerEnd
 
 VSSceneDecide_BackToCSS:
@@ -1561,83 +1577,6 @@ stb r3, 0x5(r4)
 GamePrepSceneDecide_RestoreAndExit:
 restore
 blr
-
-#region RotationLobbyScenePrep
-RotationLobbyScenePrep:
-.set REG_MNSCDESC, 31
-
-backup
-
-# Invalidate character preload cache (prevent crashes on char change between games)
-branchl r12, 0x800174bc
-
-# Get the MinorSceneDesc table (array indexed by CommonMinorID)
-branchl r12, 0x801A50A0
-mr REG_MNSCDESC, r3
-
-# Index to CommonMinorID 0x20 entry: base + 0x20 * 0x14 (stride = sizeof(MinorSceneDesc))
-addi REG_MNSCDESC, REG_MNSCDESC, 0x20 * 0x14
-
-# Overwrite file_name (+0x10) so m-ex loads RotationLobby.dat
-bl RotationLobbyFileName_BLRL
-mflr r3
-stw r3, 0x10(REG_MNSCDESC)
-
-restore
-blr
-
-RotationLobbyFileName_BLRL:
-blrl
-.string "RotationLobby.dat"
-.align 2
-#endregion
-
-#region RotationLobbySceneDecide
-RotationLobbySceneDecide:
-.set REG_MSRB_ADDR, 31
-.set REG_MNSCDESC, 30
-
-backup
-
-# Get match state info
-li r3, 0
-branchl r12, FN_LoadMatchState
-mr REG_MSRB_ADDR, r3
-
-# Clear the MinorSceneDesc file_name we set in ScenePrep, so that the
-# Splash scene (also CommonMinorID 0x20) doesn't try to load our .dat
-branchl r12, 0x801A50A0
-mr REG_MNSCDESC, r3
-addi REG_MNSCDESC, REG_MNSCDESC, 0x20 * 0x14
-li r3, 0
-stw r3, 0x10(REG_MNSCDESC)
-
-# Check connection state
-lbz r3, MSRB_CONNECTION_STATE(REG_MSRB_ADDR)
-cmpwi r3, MM_STATE_CONNECTION_SUCCESS
-bne RotationLobbySceneDecide_Disconnect
-
-# Connected — go to Splash → VS
-bl SplashSceneInit
-load r4, 0x80479d30
-li r3, 0x05
-stb r3, 0x5(r4)
-b RotationLobbySceneDecide_Exit
-
-RotationLobbySceneDecide_Disconnect:
-# Disconnected — go back to CSS
-load r4, 0x80479d30
-li r3, 0x01
-stb r3, 0x5(r4)
-
-RotationLobbySceneDecide_Exit:
-# Free MSRB buffer
-mr r3, REG_MSRB_ADDR
-branchl r12, HSD_Free
-
-restore
-blr
-#endregion
 
 Injection_Exit:
 #Exit Scene

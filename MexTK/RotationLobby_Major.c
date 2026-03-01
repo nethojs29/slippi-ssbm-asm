@@ -5,11 +5,11 @@
 //
 // This major scene owns one minor scene (the lobby UI).
 // Scene flow:
-//   CSS → Scene_SetNextMajor(ROTATION_LOBBY_MAJOR_ID) → major_load()
+//   VS ends → Scene_SetNextMajor(13) → major_load()
 //   → minor 0 (lobby UI via mnFunction in same .dat)
 //   → SceneDecide → Scene_SetNextMajor(8) + Scene_ExitMajor() → back to Slippi Online
 
-#include "major.h"
+#include "RotationLobby.h"
 
 // ---------------------------------------------------------------------------
 // Static shared data — lives for the lifetime of the major scene.
@@ -18,39 +18,38 @@
 static SharedMinorData sharedData;
 
 // ---------------------------------------------------------------------------
-// MSRB helpers
+// MSRB helper
 // ---------------------------------------------------------------------------
 static void load_msrb(u8 *buf)
 {
-    buf[0] = CMD_GET_MATCH_STATE;
-    FN_EXITransferBuffer(buf, 1, CONST_ExiWrite);
-    FN_EXITransferBuffer(buf, MSRB_TOTAL_SIZE, CONST_ExiRead);
+    buf[0] = 0xB3;  // CMD_GET_MATCH_STATE
+    ExiSlippi_Transfer(buf, 1, EXI_WRITE);
+    ExiSlippi_Transfer(buf, MSRB_TOTAL_SIZE, EXI_READ);
 }
 
 // ---------------------------------------------------------------------------
-// ScenePrep — called before the minor scene's .dat is loaded
-// Override the MinorSceneDesc filename so m-ex loads our mnFunction from
-// the same RotationLobby.dat file.
+// ScenePrep — minor_prep callback for the lobby minor scene.
+// Invalidates character preload cache, then scans MinorSceneDesc table
+// for CommonMinorID 0x20 and overwrites its file_name to "RotationLobby.dat"
+// so the m-ex "Load Minor Scene File" hook loads our .dat.
 // ---------------------------------------------------------------------------
 void ScenePrep(MinorScene *minor)
 {
     // Invalidate character preload cache (same as GamePrep)
-    // This prevents crashes when characters change between games
     void (*invalidate_preload_cache)(void) = (void (*)(void))0x800174bc;
     invalidate_preload_cache();
 
-    // Find the MinorSceneDesc for our minor_kind (CommonMinorID 0x20)
-    // and override its filename pointer to "RotationLobby.dat".
-    // The m-ex loader at 0x801a40c8 reads filename from MinorSceneDesc+0x10.
+    // Scan MinorSceneDesc table for id == 0x20 (stride 0x14)
     MinorSceneDesc *desc = Scene_GetMinorSceneDesc();
-    if (desc) {
+    while (desc->id != 0x20 && desc->id != -1)
+        desc = (MinorSceneDesc *)((char *)desc + 0x14);
+    if (desc->id == 0x20)
         desc->file_name = "RotationLobby.dat";
-    }
 }
 
 // ---------------------------------------------------------------------------
 // SceneDecide — called when the minor scene's minor_think calls Scene_ExitMinor()
-// Decides where to go next: back to Slippi Online major scene (8).
+// Transitions back to Slippi Online major scene (8).
 // ---------------------------------------------------------------------------
 void SceneDecide(MinorScene *minor)
 {
@@ -64,18 +63,8 @@ void SceneDecide(MinorScene *minor)
         return;
     }
 
-    // Connected and ready — set the return-to-VS flag in r13 so that
-    // Slippi Online's major load skips CSS and goes to Splash → VS.
-    // The flag is at OFST_R13_ROTATION_RETURN_TO_VS, written from ASM.
-    // We write it via inline assembly since we need r13 access.
-    //
-    // Actually, we can't easily write to r13 offsets from MexTK C.
-    // Instead, we use a simpler approach: write a flag byte to a known
-    // static address. The ASM side will check this.
-    //
-    // For now, transition back to major 8. The ASM-side CSSScenePrep
-    // or MajorSceneLoad will check the return-to-VS r13 flag (set by
-    // VSSceneDecide or CSSSceneDecide before entering this major scene).
+    // Connected and ready — transition back to major 8 (Slippi Online).
+    // CSS will auto-ready and advance through splash to VS.
     Scene_SetNextMajor(8);
     Scene_ExitMajor();
 }
@@ -90,7 +79,8 @@ void major_load(void)
     memset(&sharedData, 0, sizeof(SharedMinorData));
 
     // Initialize waiting ports to 0xFF (unused)
-    for (int i = 0; i < ROT_MAX_WAITING; i++)
+    int i;
+    for (i = 0; i < ROT_MAX_WAITING; i++)
         sharedData.waiting_ports[i] = 0xFF;
 
     // Load MSRB
@@ -104,14 +94,12 @@ void major_load(void)
     sharedData.games_played = sharedData.msrb[OFST_ROT_GAMES_PLAYED];
     sharedData.last_winner = sharedData.msrb[OFST_ROT_LAST_WINNER];
 
-    for (int i = 0; i < ROT_MAX_WAITING; i++)
+    for (i = 0; i < ROT_MAX_WAITING; i++)
         sharedData.waiting_ports[i] = sharedData.msrb[OFST_ROT_QUEUE_START + i];
 
     sharedData.is_active_player =
         (sharedData.local_port == sharedData.active_ports[0] ||
          sharedData.local_port == sharedData.active_ports[1]);
-
-    sharedData.is_spectator = sharedData.msrb[OFST_IS_SPECTATOR];
 
     // Default character (Fox)
     sharedData.selected_char = 0x02;
@@ -129,25 +117,14 @@ void major_exit(void)
 // ---------------------------------------------------------------------------
 // Minor scene table — single entry for the lobby UI
 //
-// Layout must match the MinorScene struct (stride 0x18):
-//   0x0:  minor_id (s8)
-//   0x1:  heap_kind (u8)
-//   0x2:  [padding to 0x4]
-//   0x4:  minor_prep (ptr)
-//   0x8:  minor_decide (ptr)
-//   0xC:  minor_kind (u8)
-//   0xD:  [padding to 0x10]
-//   0x10: load_data (ptr)
-//   0x14: unload_data (ptr)
-//
 // minor_kind = 0x20 (MNRKIND_CLSCSPLSH = Classic Mode Splash) so that
 // m-ex's "Load Minor Scene File" hook fires and loads the mnFunction
 // from the .dat file specified in MinorSceneDesc's file_name.
 // ---------------------------------------------------------------------------
 MinorScene minor_scene[] = {
     {
-        .minor_id = 0,                     // ROT_MINOR_LOBBY
-        .heap_kind = SCENEHEAPKIND_UNK3,   // 3 = persistent heaps
+        .minor_id = 0,
+        .heap_kind = 3,                    // SCENEHEAPKIND_UNK3 = persistent heaps
         .minor_prep = (void *)ScenePrep,
         .minor_decide = (void *)SceneDecide,
         .minor_kind = 0x20,                // Classic Mode Splash (triggers m-ex .dat load)

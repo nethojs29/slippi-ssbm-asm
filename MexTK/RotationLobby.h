@@ -1,23 +1,18 @@
-// Rotation Lobby Major Scene — shared header
-// Used by both major.c (scene lifecycle) and minor.c (lobby UI)
+// Rotation Lobby Scene — shared header
+// Used by both RotationLobby_Major.c (scene lifecycle) and RotationLobby_Minor.c (lobby UI)
 
-#ifndef ROTATION_LOBBY_MAJOR_H
-#define ROTATION_LOBBY_MAJOR_H
+#ifndef ROTATION_LOBBY_H
+#define ROTATION_LOBBY_H
 
-#include "../../../m-ex/MexTK/include/mex.h"
+#include "../../m-ex/MexTK/include/mex.h"
 
 // ---------------------------------------------------------------------------
-// Slippi EXI function pointers (not in melee.link, use hardcoded addresses)
+// EXI transfer
 // ---------------------------------------------------------------------------
-typedef void (*EXITransferFn)(void *buf, int len, int dir);
-#define FN_EXITransferBuffer ((EXITransferFn)0x800055f0)
-#define CONST_ExiRead  0
-#define CONST_ExiWrite 1
-
-// Slippi EXI commands
-#define CMD_GET_MATCH_STATE  0xB3
-#define CMD_GP_COMPLETE_STEP 0xC0
-#define CMD_GP_FETCH_STEP    0xC1
+typedef void (*EXITransferFn)(void *buf, int len, int mode);
+#define ExiSlippi_Transfer ((EXITransferFn)0x800055F0)
+#define EXI_WRITE 1
+#define EXI_READ  0
 
 // ---------------------------------------------------------------------------
 // MSRB field offsets (must match Online.s)
@@ -26,12 +21,8 @@ typedef void (*EXITransferFn)(void *buf, int len, int dir);
 
 #define OFST_CONNECTION_STATE    0
 #define OFST_LOCAL_PLAYER_INDEX  3
-#define OFST_LOCAL_NAME          23
 #define OFST_P1_NAME             54
 #define MSRB_NAME_SIZE           31
-#define OFST_P1_CONNECT_CODE     209
-#define MSRB_CONNECT_CODE_SIZE   10
-#define OFST_IS_SPECTATOR        971
 #define OFST_ROT_PLAYER_COUNT    972
 #define OFST_ROT_ACTIVE_P1       973
 #define OFST_ROT_ACTIVE_P2       974
@@ -42,14 +33,7 @@ typedef void (*EXITransferFn)(void *buf, int len, int dir);
 #define MM_STATE_CONNECTION_SUCCESS 4
 
 // ---------------------------------------------------------------------------
-// Rotation lobby minor scene IDs (within this major)
-// ---------------------------------------------------------------------------
-enum ROT_MINOR_KIND {
-    ROT_MINOR_LOBBY = 0,
-};
-
-// ---------------------------------------------------------------------------
-// Max supported players
+// Rotation constants
 // ---------------------------------------------------------------------------
 #define ROT_MAX_PLAYERS  10
 #define ROT_MAX_WAITING  8
@@ -67,7 +51,6 @@ typedef struct SharedMinorData {
     u8 games_played;
     u8 last_winner;
     u8 is_active_player;
-    u8 is_spectator;
 
     // Character selection results (written by minor, read by major decide)
     u8 selected_char;
@@ -79,8 +62,8 @@ typedef struct SharedMinorData {
     u8 msrb[MSRB_TOTAL_SIZE];
 } SharedMinorData;
 
-// Minor scene prep/decide (defined in major.c, referenced in minor_scene table)
+// Minor scene prep/decide (defined in major, referenced in minor_scene table)
 void ScenePrep(MinorScene *minor);
 void SceneDecide(MinorScene *minor);
 
-#endif // ROTATION_LOBBY_MAJOR_H
+#endif // ROTATION_LOBBY_H

@@ -1,30 +1,10 @@
-// Rotation Lobby Scene - MexTK source
+// Rotation Lobby Minor Scene — lobby UI (mnFunction)
 // 3D rendering + JOBJ components from GameSetup_gui.dat
+//
+// Receives SharedMinorData from major scene via load_data pointer.
+// MSRB is already fetched by major_load — no EXI transfer needed here.
 
-#include "../../m-ex/MexTK/include/mex.h"
-
-// ---------------------------------------------------------------------------
-// EXI transfer
-// ---------------------------------------------------------------------------
-typedef void (*EXITransferFn)(void *buf, int len, int mode);
-#define ExiSlippi_Transfer ((EXITransferFn)0x800055F0)
-#define EXI_WRITE 1
-#define EXI_READ  0
-
-// ---------------------------------------------------------------------------
-// MSRB offsets (must match Online.s)
-// ---------------------------------------------------------------------------
-#define MSRB_TOTAL_SIZE          985
-#define OFST_CONNECTION_STATE    0
-#define OFST_LOCAL_PLAYER_INDEX  3
-#define OFST_P1_NAME             54
-#define MSRB_NAME_SIZE           31
-#define OFST_ROT_PLAYER_COUNT    972
-#define OFST_ROT_ACTIVE_P1       973
-#define OFST_ROT_ACTIVE_P2       974
-#define OFST_ROT_QUEUE_START     975
-#define OFST_ROT_GAMES_PLAYED    983
-#define OFST_ROT_LAST_WINNER     984
+#include "RotationLobby.h"
 
 // ---------------------------------------------------------------------------
 // GUI_GameSetup — layout of GameSetup_gui.dat archive
@@ -55,15 +35,7 @@ static HSD_Archive *gui_archive = 0;
 static GUI_GameSetup *gui_assets = 0;
 static DevText *devtext = 0;
 static void *devtext_alloc = 0;
-static u8 *msrb = 0;
-
-// Parsed from MSRB
-static u8 local_port;
-static u8 active_p1;
-static u8 active_p2;
-static u8 player_count;
-static u8 games_played;
-static u8 last_winner;
+static SharedMinorData *shared = 0;
 
 // JOBJ components
 static GOBJ *p1_icon_gobj = 0;
@@ -81,7 +53,7 @@ void CObjThink(GOBJ *gobj);
 static char *get_name(int port)
 {
     if (port > 3) return "---";
-    return (char *)&msrb[OFST_P1_NAME + port * MSRB_NAME_SIZE];
+    return (char *)&shared->msrb[OFST_P1_NAME + port * MSRB_NAME_SIZE];
 }
 
 // ---------------------------------------------------------------------------
@@ -102,23 +74,10 @@ static void StockIcon_SetFrame(JOBJ *root_jobj, JOBJSet *set, u8 charId, u8 char
 // ---------------------------------------------------------------------------
 // minor_load
 // ---------------------------------------------------------------------------
-void minor_load(void *data)
+void minor_load(void *load_data)
 {
     frame_count = 0;
-
-    // Allocate + fetch MSRB
-    msrb = (u8 *)HSD_MemAlloc(MSRB_TOTAL_SIZE);
-    msrb[0] = 0xB3;
-    ExiSlippi_Transfer(msrb, 1, EXI_WRITE);
-    ExiSlippi_Transfer(msrb, MSRB_TOTAL_SIZE, EXI_READ);
-
-    // Parse rotation state
-    local_port   = msrb[OFST_LOCAL_PLAYER_INDEX];
-    player_count = msrb[OFST_ROT_PLAYER_COUNT];
-    active_p1    = msrb[OFST_ROT_ACTIVE_P1];
-    active_p2    = msrb[OFST_ROT_ACTIVE_P2];
-    games_played = msrb[OFST_ROT_GAMES_PLAYED];
-    last_winner  = msrb[OFST_ROT_LAST_WINNER];
+    shared = (SharedMinorData *)load_data;
 
     // 3D rendering setup — camera, fog, lights from GameSetup_gui.dat
     gui_archive = Archive_LoadFile("GameSetup_gui.dat");
@@ -204,7 +163,7 @@ void minor_think(void)
 
     // Row 2: Match header
     DevelopText_ResetCursorXY(devtext, 0, 2);
-    DevelopText_AddString(devtext, "  Game %d", games_played + 1);
+    DevelopText_AddString(devtext, "  Game %d", shared->games_played + 1);
 
     // Row 4: NOW PLAYING
     DevelopText_ResetCursorXY(devtext, 0, 4);
@@ -213,13 +172,13 @@ void minor_think(void)
     // Row 5: P1 vs P2
     DevelopText_ResetCursorXY(devtext, 0, 5);
     DevelopText_AddString(devtext, "    %s  vs  %s",
-        get_name(active_p1), get_name(active_p2));
+        get_name(shared->active_ports[0]), get_name(shared->active_ports[1]));
 
     // Row 7: Last winner
-    if (last_winner != 0xFF) {
+    if (shared->last_winner != 0xFF) {
         DevelopText_ResetCursorXY(devtext, 0, 7);
         DevelopText_AddString(devtext, "  Last Winner: %s",
-            get_name(last_winner));
+            get_name(shared->last_winner));
     }
 
     // Row 9: Waiting queue
@@ -228,12 +187,12 @@ void minor_think(void)
 
     int row = 10;
     int i;
-    for (i = 0; i < 8; i++) {
-        u8 port = msrb[OFST_ROT_QUEUE_START + i];
+    for (i = 0; i < ROT_MAX_WAITING; i++) {
+        u8 port = shared->waiting_ports[i];
         if (port == 0xFF) break;
         if (row >= 13) break;
         DevelopText_ResetCursorXY(devtext, 0, row);
-        if (port == local_port)
+        if (port == shared->local_port)
             DevelopText_AddString(devtext, "    %d. %s  <-- YOU", i + 1, get_name(port));
         else
             DevelopText_AddString(devtext, "    %d. %s", i + 1, get_name(port));
@@ -241,7 +200,8 @@ void minor_think(void)
     }
 
     // If local player is active, show that
-    if (local_port == active_p1 || local_port == active_p2) {
+    if (shared->local_port == shared->active_ports[0] ||
+        shared->local_port == shared->active_ports[1]) {
         DevelopText_ResetCursorXY(devtext, 0, 13);
         DevelopText_AddString(devtext, "  YOU ARE PLAYING NEXT!");
     }
@@ -253,7 +213,7 @@ void minor_think(void)
 // ---------------------------------------------------------------------------
 // minor_exit
 // ---------------------------------------------------------------------------
-void minor_exit(void *data)
+void minor_exit(void *unload_data)
 {
     if (devtext) {
         DevelopText_HideText(devtext);
@@ -272,6 +232,6 @@ void minor_exit(void *data)
         Archive_Free(gui_archive);
         gui_archive = 0;
     }
-    msrb = 0;
+    shared = 0;
     frame_count = 0;
 }
