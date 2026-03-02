@@ -10,12 +10,7 @@ static SharedMinorData sharedData;
 // ---------------------------------------------------------------------------
 void ScenePrep(MinorScene *minor)
 {
-    // Scan MinorSceneDesc table for id == 0x20 (stride 0x14)
-    MinorSceneDesc *desc = Scene_GetMinorSceneDesc();
-    while (desc->id != 0x20 && desc->id != -1)
-        desc = (MinorSceneDesc *)((char *)desc + 0x14);
-    if (desc->id == 0x20)
-        desc->file_name = "RotationLobby.dat";
+    // Empty for testing — is this where the freeze happens?
 }
 
 // ---------------------------------------------------------------------------
