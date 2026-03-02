@@ -132,6 +132,6 @@ MinorScene minor_scene[] = {
         .unload_data = (void *)&sharedData,
     },
     {
-        .minor_id = -1,  // Terminator
+        .minor_id = 255,  // Terminator
     },
 };

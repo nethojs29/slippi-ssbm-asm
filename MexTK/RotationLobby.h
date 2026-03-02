@@ -15,6 +15,22 @@ typedef void (*EXITransferFn)(void *buf, int len, int mode);
 #define EXI_READ  0
 
 // ---------------------------------------------------------------------------
+// MinorSceneDesc — the m-ex MinorSceneDesc table entry (stride 0x14).
+// Not in rapito/custom-scenes headers, so we define it here.
+// Scene_GetMinorSceneDesc() at 0x801a50ac returns a pointer to this table.
+// ---------------------------------------------------------------------------
+typedef struct MinorSceneDesc {
+    s8 id;
+    void (*cb_Think)();
+    void (*cb_Load)(void *data);
+    void (*cb_Exit)(void *data);
+    char *file_name;
+} MinorSceneDesc;
+
+typedef MinorSceneDesc *(*GetMinorSceneDescFn)(void);
+#define Scene_GetMinorSceneDesc ((GetMinorSceneDescFn)0x801a50ac)
+
+// ---------------------------------------------------------------------------
 // MSRB field offsets (must match Online.s)
 // ---------------------------------------------------------------------------
 #define MSRB_TOTAL_SIZE          985
