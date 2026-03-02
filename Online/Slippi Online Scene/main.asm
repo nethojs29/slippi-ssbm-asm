@@ -55,32 +55,7 @@
   mflr  r4
   bl  InitializeMajorSceneStruct
 
-################################################################################
-# Set RotationLobby.dat filename on major scene 13 (m-ex table)
-################################################################################
-  branchl r12, 0x801a50ac       # Scene_GetMajorSceneDesc() -> r3 (m-ex table)
-  mr REG_MinorSceneStruct, r3   # reuse r31 as temp
-RotLobbyMajor_ScanLoop:
-  lbz r4, 0x1(REG_MinorSceneStruct)    # major_id at +0x1
-  extsb r4, r4
-  cmpwi r4, -1
-  beq RotLobbyMajor_Done               # hit terminator, not found
-  cmpwi r4, 13
-  beq RotLobbyMajor_Found
-  addi REG_MinorSceneStruct, REG_MinorSceneStruct, 0x18  # MajorStride
-  b RotLobbyMajor_ScanLoop
-RotLobbyMajor_Found:
-  bl RotLobbyMajor_DatString
-  mflr r3
-  stw r3, 0x14(REG_MinorSceneStruct)   # MajorSceneDesc.file_name at +0x14
-RotLobbyMajor_Done:
-
   b Injection_Exit
-
-RotLobbyMajor_DatString:
-  blrl
-  .string "RotationLobby.dat"
-  .align 2
 
 #region PointerConvert
 PointerConvert:
@@ -300,6 +275,16 @@ bl GamePrepSceneDecide    #SceneDecide
 .align 2
 bl GamePrepData           #Minor Data 1
 bl GamePrepData           #Minor Data 2
+#RotationLobby
+.byte 6                     #Minor Scene ID
+.byte 3                    #Amount of persistent heaps
+.align 2
+bl RotationLobbyScenePrep   #ScenePrep
+bl RotationLobbySceneDecide #SceneDecide
+.byte 0x20                  #Common Minor ID (Classic Mode Splash — triggers m-ex .dat load)
+.align 2
+.long 0x80490880            #Minor Data 1 (same as Splash — vanilla cb_Load needs valid data)
+.long 0x804d68d0            #Minor Data 2
 #End
 .byte -1
 .align 2
@@ -766,10 +751,10 @@ lbz r3, MSRB_SEARCH_ONLINE_MODE(REG_MSRB_ADDR)
 cmpwi r3, ONLINE_MODE_ROTATION
 bne VSSceneDecide_BackToCSS
 
-# Rotation: exit to major scene 13 (RotationLobby)
-li r3, 13
-branchl r12, 0x801A42E8        # Scene_SetNextMajor(13)
-branchl r12, 0x801A42D4        # Scene_ExitMajor()
+# Rotation: go to RotationLobby (minor scene 6, transition byte 0x07)
+load r4, 0x80479d30
+li r3, 0x07
+stb r3, 0x5(r4)
 b VSSceneDecide_ModeHandlerEnd
 
 VSSceneDecide_BackToCSS:
@@ -1577,6 +1562,129 @@ stb r3, 0x5(r4)
 GamePrepSceneDecide_RestoreAndExit:
 restore
 blr
+
+#region RotationLobbyScenePrep
+RotationLobbyScenePrep:
+.set REG_MNSCDESC, 31
+
+backup
+
+# Invalidate character preload cache (prevent crashes on char change between games)
+branchl r12, 0x800174bc
+
+# Get the MinorSceneDesc table
+branchl r12, 0x801A50A0
+mr REG_MNSCDESC, r3
+
+# Scan for CommonMinorID 0x20 entry (stride 0x14)
+RotLobbyMinorScan_Loop:
+  lbz r4, 0x0(REG_MNSCDESC)         # id at +0x0
+  extsb r4, r4
+  cmpwi r4, -1                       # terminator
+  beq RotLobbyMinorScan_Done
+  cmpwi r4, 0x20
+  beq RotLobbyMinorScan_Found
+  addi REG_MNSCDESC, REG_MNSCDESC, 0x14  # MinorTypeStride
+  b RotLobbyMinorScan_Loop
+
+RotLobbyMinorScan_Found:
+# Save original callbacks before m-ex hook overwrites them
+bl RotLobbySavedCallbacks_BLRL
+mflr r5
+lwz r3, 0x4(REG_MNSCDESC)           # cb_Think
+stw r3, 0x0(r5)
+lwz r3, 0x8(REG_MNSCDESC)           # cb_Load
+stw r3, 0x4(r5)
+lwz r3, 0xC(REG_MNSCDESC)           # cb_Exit
+stw r3, 0x8(r5)
+
+# Set file_name so m-ex loads RotationLobby.dat
+bl RotationLobbyFileName_BLRL
+mflr r3
+stw r3, 0x10(REG_MNSCDESC)
+
+RotLobbyMinorScan_Done:
+restore
+blr
+
+RotationLobbyFileName_BLRL:
+blrl
+.string "RotationLobby.dat"
+.align 2
+
+# Storage for original MinorSceneDesc callbacks (3 words)
+RotLobbySavedCallbacks_BLRL:
+blrl
+.long 0  # original cb_Think
+.long 0  # original cb_Load
+.long 0  # original cb_Exit
+#endregion
+
+#region RotationLobbySceneDecide
+RotationLobbySceneDecide:
+.set REG_MSRB_ADDR, 31
+.set REG_MNSCDESC, 30
+
+backup
+
+# Get match state info
+li r3, 0
+branchl r12, FN_LoadMatchState
+mr REG_MSRB_ADDR, r3
+
+# Clear the MinorSceneDesc file_name we set in ScenePrep, so that the
+# Splash scene (also CommonMinorID 0x20) doesn't try to load our .dat
+branchl r12, 0x801A50A0
+mr REG_MNSCDESC, r3
+RotLobbyDecideScan_Loop:
+  lbz r4, 0x0(REG_MNSCDESC)
+  extsb r4, r4
+  cmpwi r4, -1
+  beq RotLobbyDecideScan_Done
+  cmpwi r4, 0x20
+  beq RotLobbyDecideScan_Found
+  addi REG_MNSCDESC, REG_MNSCDESC, 0x14
+  b RotLobbyDecideScan_Loop
+RotLobbyDecideScan_Found:
+  # Restore original callbacks saved by ScenePrep
+  bl RotLobbySavedCallbacks_BLRL
+  mflr r5
+  lwz r3, 0x0(r5)
+  stw r3, 0x4(REG_MNSCDESC)          # restore cb_Think
+  lwz r3, 0x4(r5)
+  stw r3, 0x8(REG_MNSCDESC)          # restore cb_Load
+  lwz r3, 0x8(r5)
+  stw r3, 0xC(REG_MNSCDESC)          # restore cb_Exit
+  li r3, 0
+  stw r3, 0x10(REG_MNSCDESC)         # clear file_name
+RotLobbyDecideScan_Done:
+
+# Check connection state
+lbz r3, MSRB_CONNECTION_STATE(REG_MSRB_ADDR)
+cmpwi r3, MM_STATE_CONNECTION_SUCCESS
+bne RotationLobbySceneDecide_Disconnect
+
+# Connected — go to Splash → VS
+bl SplashSceneInit
+load r4, 0x80479d30
+li r3, 0x05                 # Splash transition
+stb r3, 0x5(r4)
+b RotationLobbySceneDecide_Exit
+
+RotationLobbySceneDecide_Disconnect:
+# Disconnected — go back to CSS
+load r4, 0x80479d30
+li r3, 0x01
+stb r3, 0x5(r4)
+
+RotationLobbySceneDecide_Exit:
+# Free MSRB buffer
+mr r3, REG_MSRB_ADDR
+branchl r12, HSD_Free
+
+restore
+blr
+#endregion
 
 Injection_Exit:
 #Exit Scene
