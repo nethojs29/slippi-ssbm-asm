@@ -281,10 +281,10 @@ bl GamePrepData           #Minor Data 2
 .align 2
 bl RotationLobbyScenePrep   #ScenePrep
 bl RotationLobbySceneDecide #SceneDecide
-.byte 0x20                  #Common Minor ID (Classic Mode Splash — triggers m-ex .dat load)
+.byte 0x0A                  #Common Minor ID (MNRKIND_XA — unused slot, all null callbacks)
 .align 2
-.long 0x80490880            #Minor Data 1 (same as Splash — vanilla cb_Load needs valid data)
-.long 0x804d68d0            #Minor Data 2
+.long 0x00000000            #Minor Data 1
+.long 0x00000000            #Minor Data 2
 #End
 .byte -1
 .align 2
@@ -1576,28 +1576,18 @@ branchl r12, 0x800174bc
 branchl r12, 0x801A50A0
 mr REG_MNSCDESC, r3
 
-# Scan for CommonMinorID 0x20 entry (stride 0x14)
+# Scan for CommonMinorID 0x0A entry (stride 0x14)
 RotLobbyMinorScan_Loop:
   lbz r4, 0x0(REG_MNSCDESC)         # id at +0x0
   extsb r4, r4
   cmpwi r4, -1                       # terminator
   beq RotLobbyMinorScan_Done
-  cmpwi r4, 0x20
+  cmpwi r4, 0x0A
   beq RotLobbyMinorScan_Found
   addi REG_MNSCDESC, REG_MNSCDESC, 0x14  # MinorTypeStride
   b RotLobbyMinorScan_Loop
 
 RotLobbyMinorScan_Found:
-# Save original callbacks before m-ex hook overwrites them
-bl RotLobbySavedCallbacks_BLRL
-mflr r5
-lwz r3, 0x4(REG_MNSCDESC)           # cb_Think
-stw r3, 0x0(r5)
-lwz r3, 0x8(REG_MNSCDESC)           # cb_Load
-stw r3, 0x4(r5)
-lwz r3, 0xC(REG_MNSCDESC)           # cb_Exit
-stw r3, 0x8(r5)
-
 # Set file_name so m-ex loads RotationLobby.dat
 bl RotationLobbyFileName_BLRL
 mflr r3
@@ -1611,13 +1601,6 @@ RotationLobbyFileName_BLRL:
 blrl
 .string "RotationLobby.dat"
 .align 2
-
-# Storage for original MinorSceneDesc callbacks (3 words)
-RotLobbySavedCallbacks_BLRL:
-blrl
-.long 0  # original cb_Think
-.long 0  # original cb_Load
-.long 0  # original cb_Exit
 #endregion
 
 #region RotationLobbySceneDecide
@@ -1632,8 +1615,7 @@ li r3, 0
 branchl r12, FN_LoadMatchState
 mr REG_MSRB_ADDR, r3
 
-# Clear the MinorSceneDesc file_name we set in ScenePrep, so that the
-# Splash scene (also CommonMinorID 0x20) doesn't try to load our .dat
+# Clear the MinorSceneDesc file_name we set in ScenePrep (0x0A entry)
 branchl r12, 0x801A50A0
 mr REG_MNSCDESC, r3
 RotLobbyDecideScan_Loop:
@@ -1641,20 +1623,11 @@ RotLobbyDecideScan_Loop:
   extsb r4, r4
   cmpwi r4, -1
   beq RotLobbyDecideScan_Done
-  cmpwi r4, 0x20
+  cmpwi r4, 0x0A
   beq RotLobbyDecideScan_Found
   addi REG_MNSCDESC, REG_MNSCDESC, 0x14
   b RotLobbyDecideScan_Loop
 RotLobbyDecideScan_Found:
-  # Restore original callbacks saved by ScenePrep
-  bl RotLobbySavedCallbacks_BLRL
-  mflr r5
-  lwz r3, 0x0(r5)
-  stw r3, 0x4(REG_MNSCDESC)          # restore cb_Think
-  lwz r3, 0x4(r5)
-  stw r3, 0x8(REG_MNSCDESC)          # restore cb_Load
-  lwz r3, 0x8(r5)
-  stw r3, 0xC(REG_MNSCDESC)          # restore cb_Exit
   li r3, 0
   stw r3, 0x10(REG_MNSCDESC)         # clear file_name
 RotLobbyDecideScan_Done:
