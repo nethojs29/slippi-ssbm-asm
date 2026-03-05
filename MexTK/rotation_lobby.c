@@ -15,14 +15,18 @@ typedef void (*EXITransferFn)(void *buf, int len, int mode);
 #define CMD_GP_FETCH_STEP         0xC1
 #define CMD_SET_SELECTIONS        0xB5
 #define CMD_CLEANUP_CONNECTIONS   0xBA
+#define CMD_ROT_SET_SITOUT        0xC5
+#define CMD_ROT_GET_SITOUT        0xC6
 
 // Z-hold disconnect (2 seconds = 120 frames at 60fps)
 #define Z_HOLD_DISCONNECT_FRAMES  120
 
 // MSRB offsets (must match Online.s)
-#define MSRB_TOTAL_SIZE          1003
-#define OFST_CONNECTION_STATE    0
-#define OFST_LOCAL_PLAYER_INDEX  3
+#define MSRB_TOTAL_SIZE          1004
+#define OFST_CONNECTION_STATE       0
+#define OFST_LOCAL_PLAYER_READY     1
+#define OFST_REMOTE_PLAYERS_READY   2
+#define OFST_LOCAL_PLAYER_INDEX     3
 #define OFST_P1_NAME             54
 #define MSRB_NAME_SIZE           31
 #define OFST_ROT_PLAYER_COUNT    972
@@ -33,11 +37,13 @@ typedef void (*EXITransferFn)(void *buf, int len, int mode);
 #define OFST_ROT_LAST_WINNER     984
 #define OFST_ROT_LOBBY_CODE      985
 #define MSRB_LOBBY_CODE_SIZE     18
+#define OFST_ROT_SITOUT_FLAGS    1003
 
-// Match block within MSRB: player charId/charColor
+// Match block within MSRB: player charId/charColor/playerType
 #define OFST_MATCH_BLOCK         606
 #define MATCH_PLAYER_STRIDE      0x24
 #define MATCH_CHAR_ID_OFF        0x60
+#define MATCH_PLAYER_TYPE_OFF    0x61
 #define MATCH_CHAR_COLOR_OFF     0x63
 
 // GUI_GameSetup layout
@@ -88,6 +94,16 @@ typedef struct {
 
 typedef struct {
     u8 command;
+    u8 player_port;
+    u8 is_sitout;
+} RotSetSitoutQuery;
+
+typedef struct {
+    u8 sitout_flags;
+} RotGetSitoutResponse;
+
+typedef struct {
+    u8 command;
     u8 team_id;
     u8 char_id;
     u8 char_color_id;
@@ -96,6 +112,20 @@ typedef struct {
     u8 stage_option;
     u8 online_mode;
 } SetSelectionsQuery;
+
+typedef struct {
+    u8 is_set;
+    u8 char_id;
+    u8 char_color_id;
+} OverwriteCharEntry;
+
+typedef struct {
+    u8 command;
+    u16 stage_id;
+    OverwriteCharEntry chars[4];
+} OverwriteSelectionsQuery;
+
+#define CMD_OVERWRITE_SELECTIONS 0xBF
 
 // =========================================================================
 // CSIcon material enum — indices into GameSetup_gui.dat anim set 1
@@ -509,9 +539,8 @@ static void CPD_InputsThink(GOBJ *gobj)
     cpd->state.open_frame_count++;
     if (cpd->state.open_frame_count == 1) return; // skip first frame
 
-    u8 port = R13_U8(-0x5108);
-    u64 scrollInputs = Pad_GetRapidHeld(port);
-    u64 downInputs = Pad_GetDown(port);
+    u64 scrollInputs = Pad_GetRapidHeld(0);
+    u64 downInputs = Pad_GetDown(0);
 
     if (downInputs & HSD_BUTTON_A) {
         SFX_PlayCommon(SFX_ACCEPT);
@@ -694,6 +723,7 @@ static u8 *msrb = 0;
 
 // Parsed from MSRB
 static u8 local_port;
+static u8 pad_port;    // hardware pad port (always 0 in online)
 static u8 active_p1;
 static u8 active_p2;
 static u8 player_count;
@@ -710,11 +740,18 @@ static u8 opp_char_color = 0;
 static u8 is_active_player = 0;
 static u8 dialog_open = 0;
 static int z_hold_frames = 0;
+static u8 local_sitout = 0;
+static u8 all_sitout_flags = 0;
+
 
 // EXI buffers
 static GpCompleteStepQuery *complete_query = 0;
 static GpFetchStepQuery *fetch_query = 0;
 static GpFetchStepResponse *fetch_resp = 0;
+static u8 *msrb_poll_buf = 0;  // spectators re-poll MSRB every frame
+static RotSetSitoutQuery *sitout_query = 0;
+static u8 *sitout_cmd = 0;
+static RotGetSitoutResponse *sitout_resp = 0;
 
 // Visual components
 static CSIcon *p1_icon = 0;
@@ -781,6 +818,10 @@ static void poll_opponent(void)
 
 static void apply_selections(void)
 {
+    // Send CMD_SET_SELECTIONS for the local player. This updates localSelections in C++
+    // and broadcasts to all peers via netplay, so their remotePlayerSelections gets updated.
+    // Called immediately on START press so the netplay message has time to propagate to
+    // the opponent before their SceneDecide calls prepareOnlineMatchState().
     SetSelectionsQuery *ssq = calloc(sizeof(SetSelectionsQuery));
     ssq->command = CMD_SET_SELECTIONS;
     ssq->team_id = 0;
@@ -791,6 +832,38 @@ static void apply_selections(void)
     ssq->stage_option = 1;
     ssq->online_mode = 0;
     ExiSlippi_Transfer(ssq, sizeof(SetSelectionsQuery), EXI_WRITE);
+    HSD_Free(ssq);
+}
+
+// Force both active players' characters into the match block.
+// Called right before Scene_ExitMinor so prepareOnlineMatchState uses the right data.
+// This doesn't depend on netplay — each client writes its own known state locally.
+static void force_match_characters(void)
+{
+    OverwriteSelectionsQuery *owq = calloc(sizeof(OverwriteSelectionsQuery));
+    owq->command = CMD_OVERWRITE_SELECTIONS;
+    owq->stage_id = 0;
+
+    int i;
+    for (i = 0; i < 4; i++) {
+        owq->chars[i].is_set = 0;
+        owq->chars[i].char_id = 0;
+        owq->chars[i].char_color_id = 0;
+    }
+
+    // Local player's character
+    owq->chars[local_port].is_set = 1;
+    owq->chars[local_port].char_id = local_char_id;
+    owq->chars[local_port].char_color_id = local_char_color;
+
+    // Opponent's character (from game prep poll, or default if not confirmed)
+    u8 opp_port = (local_port == active_p1) ? active_p2 : active_p1;
+    owq->chars[opp_port].is_set = 1;
+    owq->chars[opp_port].char_id = opp_confirmed ? opp_char_id : local_char_id;
+    owq->chars[opp_port].char_color_id = opp_confirmed ? opp_char_color : 0;
+
+    ExiSlippi_Transfer(owq, sizeof(OverwriteSelectionsQuery), EXI_WRITE);
+    HSD_Free(owq);
 }
 
 // Update a CSIcon to show a character + stock icon
@@ -838,6 +911,8 @@ void minor_load(void *data)
     z_hold_frames = 0;
     opp_char_id = 0;
     opp_char_color = 0;
+    local_sitout = 0;
+    all_sitout_flags = 0;
 
     // Fetch MSRB
     msrb = calloc(MSRB_TOTAL_SIZE);
@@ -846,13 +921,19 @@ void minor_load(void *data)
     ExiSlippi_Transfer(msrb, MSRB_TOTAL_SIZE, EXI_READ);
 
     local_port   = msrb[OFST_LOCAL_PLAYER_INDEX];
+    pad_port     = 0;  // online always uses hardware pad 0
 
-    // Read last-used character from the match block
-    local_char_id = msrb[OFST_MATCH_BLOCK + MATCH_CHAR_ID_OFF + local_port * MATCH_PLAYER_STRIDE];
-    local_char_color = msrb[OFST_MATCH_BLOCK + MATCH_CHAR_COLOR_OFF + local_port * MATCH_PLAYER_STRIDE];
-    if (local_char_id >= NUM_PLAYABLE_CHARS) {
-        local_char_id = CKIND_MARTH;
-        local_char_color = 0;
+    // Read last-used character from the match block.
+    // Spectator slots have playerType=3 and charId=0x19 (stub), so their match block
+    // data is meaningless. Default to Marth for spectators/new challengers.
+    {
+        u8 ptype = msrb[OFST_MATCH_BLOCK + MATCH_PLAYER_TYPE_OFF + local_port * MATCH_PLAYER_STRIDE];
+        local_char_id = msrb[OFST_MATCH_BLOCK + MATCH_CHAR_ID_OFF + local_port * MATCH_PLAYER_STRIDE];
+        local_char_color = msrb[OFST_MATCH_BLOCK + MATCH_CHAR_COLOR_OFF + local_port * MATCH_PLAYER_STRIDE];
+        if (ptype == 3 || ptype == 0xFF || local_char_id >= NUM_PLAYABLE_CHARS) {
+            local_char_id = CKIND_MARTH;
+            local_char_color = 0;
+        }
     }
     player_count = msrb[OFST_ROT_PLAYER_COUNT];
     active_p1    = msrb[OFST_ROT_ACTIVE_P1];
@@ -860,12 +941,18 @@ void minor_load(void *data)
     games_played = msrb[OFST_ROT_GAMES_PLAYED];
     last_winner  = msrb[OFST_ROT_LAST_WINNER];
 
+    all_sitout_flags = msrb[OFST_ROT_SITOUT_FLAGS];
+
     is_active_player = (local_port == active_p1 || local_port == active_p2);
 
     // EXI buffers
     complete_query = calloc(sizeof(GpCompleteStepQuery));
     fetch_query = calloc(sizeof(GpFetchStepQuery));
     fetch_resp = calloc(sizeof(GpFetchStepResponse));
+    sitout_query = calloc(sizeof(RotSetSitoutQuery));
+    sitout_cmd = calloc(1);
+    sitout_resp = calloc(sizeof(RotGetSitoutResponse));
+    msrb_poll_buf = calloc(MSRB_TOTAL_SIZE);
 
     // 3D setup from GameSetup_gui.dat
     gui_archive = Archive_LoadFile("GameSetup_gui.dat");
@@ -1012,7 +1099,10 @@ void minor_load(void *data)
     if (is_active_player) {
         Text_SetText(text, st_status, "A: pick character  START: confirm");
     } else {
-        Text_SetText(text, st_status, "Spectating...");
+        if (all_sitout_flags & (1 << local_port))
+            Text_SetText(text, st_status, "Sitting out - Y to rejoin");
+        else
+            Text_SetText(text, st_status, "Spectating - Y to sit out");
     }
 
     // Build queue list
@@ -1020,7 +1110,10 @@ void minor_load(void *data)
     for (i = 0; i < 8 && slot < 8; i++) {
         u8 port = msrb[OFST_ROT_QUEUE_START + i];
         if (port == 0xFF) break;
-        Text_SetText(text, st_queue[slot], "%d. %s", slot + 1, get_name(port));
+        if (all_sitout_flags & (1 << port))
+            Text_SetText(text, st_queue[slot], "%d. %s - OUT", slot + 1, get_name(port));
+        else
+            Text_SetText(text, st_queue[slot], "%d. %s", slot + 1, get_name(port));
         if (port == local_port)
             Text_SetColor(text, st_queue[slot], &color_white);
         slot++;
@@ -1059,7 +1152,7 @@ void minor_think(void)
 
     // Z-hold disconnect (any player can disconnect)
     if (local_port < 4) {
-        u64 held = Pad_GetHeld(local_port);
+        u64 held = Pad_GetHeld(pad_port);
         if (held & HSD_TRIGGER_Z) {
             z_hold_frames++;
             int remain = Z_HOLD_DISCONNECT_FRAMES - z_hold_frames;
@@ -1085,7 +1178,57 @@ void minor_think(void)
                     else
                         Text_SetText(text, st_status, "A: pick character  START: confirm");
                 } else {
-                    Text_SetText(text, st_status, "Spectating...");
+                    if (local_sitout)
+                        Text_SetText(text, st_status, "Sitting out - Y to rejoin");
+                    else
+                        Text_SetText(text, st_status, "Spectating - Y to sit out");
+                }
+            }
+        }
+    }
+
+    // Poll sit-out flags from C++ every frame
+    *sitout_cmd = CMD_ROT_GET_SITOUT;
+    ExiSlippi_Transfer(sitout_cmd, 1, EXI_WRITE);
+    ExiSlippi_Transfer(sitout_resp, sizeof(RotGetSitoutResponse), EXI_READ);
+    all_sitout_flags = sitout_resp->sitout_flags;
+
+    // Y-button sit-out toggle for spectating/queue players
+    if (!is_active_player && local_port < 4 && z_hold_frames == 0) {
+        u64 down = Pad_GetDown(pad_port);
+        if (down & HSD_BUTTON_Y) {
+            local_sitout = !local_sitout;
+
+            // Send toggle via EXI
+            sitout_query->command = CMD_ROT_SET_SITOUT;
+            sitout_query->player_port = local_port;
+            sitout_query->is_sitout = local_sitout;
+            ExiSlippi_Transfer(sitout_query, sizeof(RotSetSitoutQuery), EXI_WRITE);
+            SFX_PlayCommon(SFX_NEXT);
+
+            // Update local flags immediately so queue refresh below uses the new state
+            if (local_sitout)
+                all_sitout_flags |= (1 << local_port);
+            else
+                all_sitout_flags &= ~(1 << local_port);
+
+            // Update status text
+            if (local_sitout)
+                Text_SetText(text, st_status, "Sitting out - Y to rejoin");
+            else
+                Text_SetText(text, st_status, "Spectating - Y to sit out");
+
+            // Refresh queue display
+            {
+                int qi, qs = 0;
+                for (qi = 0; qi < 8 && qs < 8; qi++) {
+                    u8 port = msrb[OFST_ROT_QUEUE_START + qi];
+                    if (port == 0xFF) break;
+                    if (all_sitout_flags & (1 << port))
+                        Text_SetText(text, st_queue[qs], "%d. %s - OUT", qs + 1, get_name(port));
+                    else
+                        Text_SetText(text, st_queue[qs], "%d. %s", qs + 1, get_name(port));
+                    qs++;
                 }
             }
         }
@@ -1093,7 +1236,7 @@ void minor_think(void)
 
     // Handle input for active players only
     if (is_active_player && !local_confirmed && local_port < 4) {
-        u64 down = Pad_GetDown(local_port);
+        u64 down = Pad_GetDown(pad_port);
 
         // Don't handle scene-level input while dialog is open
         if (!dialog_open) {
@@ -1107,6 +1250,7 @@ void minor_think(void)
             if (down & HSD_BUTTON_START) {
                 local_confirmed = 1;
                 send_selection();
+                apply_selections();  // send CMD_SET_SELECTIONS immediately for netplay propagation
                 SFX_PlayCommon(SFX_ACCEPT);
 
                 // Set confirmed icon to blink, indicator to static
@@ -1120,7 +1264,7 @@ void minor_think(void)
         }
     }
 
-    // Poll for opponent's selection every frame
+    // Poll for opponent's selection every frame (active players)
     if (is_active_player && !opp_confirmed) {
         poll_opponent();
         if (opp_confirmed) {
@@ -1133,10 +1277,39 @@ void minor_think(void)
         }
     }
 
-    // Both confirmed or timer expired: apply and exit
-    if (frame_count >= LOBBY_DURATION || (local_confirmed && opp_confirmed)) {
+    // Poll MSRB every frame to keep prepareOnlineMatchState() running.
+    // This replaces the CSS polling loop that normally drives readiness.
+    // For spectators: auto-readies localSelections + broadcasts via SetMatchSelections
+    //   so active players don't see spectators as blocking.
+    // For active players: broadcasts localSelections so spectators (and opponent)
+    //   see them as ready once they confirm. Without this, remote clients never
+    //   receive the active player's selections via netplay.
+    msrb_poll_buf[0] = 0xB3;
+    ExiSlippi_Transfer(msrb_poll_buf, 1, EXI_WRITE);
+    ExiSlippi_Transfer(msrb_poll_buf, MSRB_TOTAL_SIZE, EXI_READ);
+
+    // Exit conditions
+    u8 all_ready = 0;
+    if (is_active_player) {
+        all_ready = local_confirmed && opp_confirmed;
+    } else {
+        // Spectators: use remotePlayersReady from the MSRB response.
+        // prepareOnlineMatchState() checks each remote player's isCharacterSelected,
+        // skipping spectator ports. It only sets remotePlayersReady=1 when ALL
+        // active players have confirmed (their apply_selections sent via netplay).
+        all_ready = msrb_poll_buf[OFST_REMOTE_PLAYERS_READY];
+    }
+
+    if (frame_count >= LOBBY_DURATION || all_ready) {
         if (is_active_player) {
-            apply_selections();
+            // If timer expired and player never confirmed, send selections now as fallback
+            if (!local_confirmed) {
+                apply_selections();
+            }
+            // Force both characters into the match block locally.
+            // Can't rely on netplay CMD_SET_SELECTIONS arriving in time — CSS polling
+            // doesn't run during this minor scene, so write both directly.
+            force_match_characters();
         }
         Scene_ExitMinor();
     }
@@ -1154,6 +1327,10 @@ void minor_exit(void *data)
     if (complete_query) { HSD_Free(complete_query); complete_query = 0; }
     if (fetch_query) { HSD_Free(fetch_query); fetch_query = 0; }
     if (fetch_resp) { HSD_Free(fetch_resp); fetch_resp = 0; }
+    if (sitout_query) { HSD_Free(sitout_query); sitout_query = 0; }
+    if (sitout_cmd) { HSD_Free(sitout_cmd); sitout_cmd = 0; }
+    if (sitout_resp) { HSD_Free(sitout_resp); sitout_resp = 0; }
+    if (msrb_poll_buf) { HSD_Free(msrb_poll_buf); msrb_poll_buf = 0; }
 
     // CSIcon and CharPickerDialog don't implement Free — they live on the
     // scene heap and are cleaned up when the archive is freed.
@@ -1163,6 +1340,8 @@ void minor_exit(void *data)
     p1_indicator = 0;
     p2_indicator = 0;
     dialog_open = 0;
+    local_sitout = 0;
+    all_sitout_flags = 0;
 
     gui_assets = 0;
     if (gui_archive) {
